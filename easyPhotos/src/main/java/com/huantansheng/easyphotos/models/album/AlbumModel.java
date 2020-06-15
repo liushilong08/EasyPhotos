@@ -53,7 +53,10 @@ public class AlbumModel {
      * @param context  调用查询方法的context
      * @param callBack 查询完成后的回调
      */
+    public boolean canRun = true;
+
     public void query(final Context context, final CallBack callBack) {
+        canRun = true;
         new Thread(new Runnable() {
             @Override
             public void run() {
@@ -64,45 +67,51 @@ public class AlbumModel {
         }).start();
     }
 
+    public void stopQuery() {
+        canRun = false;
+    }
+
     private void initAlbum(Context context) {
         if (Setting.selectedPhotos.size() > Setting.count) {
-            throw new RuntimeException("AlbumBuilder: 默认勾选的图片张数不能大于设置的选择数！" + "|默认勾选张数：" +
-                    Setting.selectedPhotos.size() + "|设置的选择数：" + Setting.count);
+            throw new RuntimeException("AlbumBuilder: 默认勾选的图片张数不能大于设置的选择数！" + "|默认勾选张数：" + Setting.selectedPhotos.size() + "|设置的选择数：" + Setting.count);
         }
 
         final Uri contentUri = MediaStore.Files.getContentUri("external");
         final String sortOrder = MediaStore.Files.FileColumns.DATE_MODIFIED + " DESC";
         final String selection =
-                "(" + MediaStore.Files.FileColumns.MEDIA_TYPE + "=?"
-                        + " OR "
-                        + MediaStore.Files.FileColumns.MEDIA_TYPE + "=?)"
-                        + " AND "
-                        + MediaStore.MediaColumns.SIZE + ">0";
-        final String[] selectionAllArgs = {
-                String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE),
-                String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO),
-        };
+                "(" + MediaStore.Files.FileColumns.MEDIA_TYPE + "=?" + " OR " + MediaStore.Files.FileColumns.MEDIA_TYPE + "=?)" + " AND " + MediaStore.MediaColumns.SIZE + ">0";
+        String[] selectionAllArgs =
+                {String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE),
+                        String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)};
+
+        if (Setting.isOnlyVideo()){
+            selectionAllArgs = new String[]{String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO)};
+        }
 
         ContentResolver contentResolver = context.getContentResolver();
         String[] projections;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
-            projections = new String[]{MediaStore.Files.FileColumns._ID, MediaStore.MediaColumns.DATA,
-                    MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_MODIFIED,
-                    MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.WIDTH, MediaStore
-                    .MediaColumns.HEIGHT, MediaStore.MediaColumns.SIZE, MediaStore.Video.Media.DURATION};
+            projections = new String[]{MediaStore.Files.FileColumns._ID,
+                    MediaStore.MediaColumns.DATA, MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.MIME_TYPE,
+                    MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT,
+                    MediaStore.MediaColumns.SIZE, MediaStore.Video.Media.DURATION};
 
         } else {
             projections = new String[]{MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATA,
                     MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.DATE_MODIFIED,
-                    MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE, MediaStore.Video.Media.DURATION};
+                    MediaStore.MediaColumns.MIME_TYPE, MediaStore.MediaColumns.SIZE,
+                    MediaStore.Video.Media.DURATION};
         }
-        Cursor cursor = contentResolver.query(contentUri, projections, selection, selectionAllArgs, sortOrder);
+        Cursor cursor = contentResolver.query(contentUri, projections, selection,
+                selectionAllArgs, sortOrder);
         if (cursor == null) {
 //            Log.d(TAG, "call: " + "Empty photos");
         } else if (cursor.moveToFirst()) {
             String albumItem_all_name = getAllAlbumName(context);
-            String albumItem_video_name = context.getString(R.string.selector_folder_video_easy_photos);
-
+            String albumItem_video_name =
+                    context.getString(R.string.selector_folder_video_easy_photos);
+            int idCol = cursor.getColumnIndex(MediaStore.MediaColumns._ID);
             int pathCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATA);
             int nameCol = cursor.getColumnIndex(MediaStore.MediaColumns.DISPLAY_NAME);
             int DateCol = cursor.getColumnIndex(MediaStore.MediaColumns.DATE_MODIFIED);
@@ -117,6 +126,7 @@ public class AlbumModel {
             }
 
             do {
+                String id = cursor.getString(idCol);
                 String path = cursor.getString(pathCol);
                 String name = cursor.getString(nameCol);
                 long dateTime = cursor.getLong(DateCol);
@@ -131,6 +141,7 @@ public class AlbumModel {
                 }
 
                 boolean isVideo = type.contains(Type.VIDEO);// 是否是视频
+                Uri uri = Uri.withAppendedPath(isVideo?MediaStore.Video.Media.EXTERNAL_CONTENT_URI:MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
 
                 if (Setting.isOnlyVideo() && !isVideo) {
                     continue;
@@ -159,9 +170,12 @@ public class AlbumModel {
                 if (!isVideo && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.JELLY_BEAN) {
                     width = cursor.getInt(WidthCol);
                     height = cursor.getInt(HeightCol);
-                    if (width < Setting.minWidth || height < Setting.minHeight) {
-                        continue;
+                    if (width>0 && height>0){
+                        if (width < Setting.minWidth || height < Setting.minHeight) {
+                            continue;
+                        }
                     }
+
                 }
 
                 File file = new File(path);
@@ -169,7 +183,8 @@ public class AlbumModel {
                     continue;
                 }
 
-                Photo imageItem = new Photo(name, path, dateTime, width, height, size, duration, type);
+                Photo imageItem = new Photo(name,uri, path, dateTime, width, height, size, duration,
+                        type);
                 if (!Setting.selectedPhotos.isEmpty()) {
                     for (Photo selectedPhoto : Setting.selectedPhotos) {
                         if (path.equals(selectedPhoto.path)) {
@@ -182,22 +197,26 @@ public class AlbumModel {
                 // 初始化“全部”专辑
                 if (album.isEmpty()) {
                     // 用第一个图片作为专辑的封面
-                    album.addAlbumItem(albumItem_all_name, "", path);
+                    album.addAlbumItem(albumItem_all_name, "", path,uri);
                 }
                 // 把图片全部放进“全部”专辑
                 album.getAlbumItem(albumItem_all_name).addImageItem(imageItem);
 
                 if (Setting.showVideo && isVideo && !albumItem_video_name.equals(albumItem_all_name)) {
-                    album.addAlbumItem(albumItem_video_name, "", path);
+                    album.addAlbumItem(albumItem_video_name, "", path,uri);
                     album.getAlbumItem(albumItem_video_name).addImageItem(imageItem);
                 }
 
                 // 添加当前图片的专辑到专辑模型实体中
-                String folderPath = new File(path).getParentFile().getAbsolutePath();
+                File parentFile = new File(path).getParentFile();
+                if (null == parentFile) {
+                    continue;
+                }
+                String folderPath = parentFile.getAbsolutePath();
                 String albumName = StringUtils.getLastPathSegment(folderPath);
-                album.addAlbumItem(albumName, folderPath, path);
+                album.addAlbumItem(albumName, folderPath, path,uri);
                 album.getAlbumItem(albumName).addImageItem(imageItem);
-            } while (cursor.moveToNext());
+            } while (cursor.moveToNext() && canRun);
             cursor.close();
         }
     }
@@ -208,7 +227,8 @@ public class AlbumModel {
      * @return 专辑名
      */
     public String getAllAlbumName(Context context) {
-        String albumItem_all_name = context.getString(R.string.selector_folder_all_video_photo_easy_photos);
+        String albumItem_all_name =
+                context.getString(R.string.selector_folder_all_video_photo_easy_photos);
         if (Setting.isOnlyVideo()) {
             albumItem_all_name = context.getString(R.string.selector_folder_video_easy_photos);
         } else if (!Setting.showVideo) {
